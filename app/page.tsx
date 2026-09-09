@@ -1,0 +1,189 @@
+'use client';
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, Upload, FileText, Headphones, Play, Pause, Square, SkipBack, SkipForward, ArrowUpRight, ChevronLeft, ChevronRight, PencilLine, Download, X, ScanText, LoaderCircle, Volume2 } from 'lucide-react';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { Slider } from '@/components/ui/slider';
+import { Progress } from '@/components/ui/progress';
+import { Switch } from '@/components/ui/switch';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { sampleDocument, makeDocument, paginateText, MAX_CHARACTERS, type ReadingDocument } from '@/lib/reader-model';
+import { extractDocument, OCR_LANGUAGES, type ImportProgress } from '@/lib/extract-document';
+import { SpeechPlayer, type PlayerSnapshot } from '@/lib/speech-player';
+
+type ModelTool = { name:string; description:string; inputSchema:object; annotations:object; execute:(input:unknown)=>unknown };
+type ModelContext = {registerTool:(tool:ModelTool,options:{signal:AbortSignal})=>void|Promise<void>};
+
+export default function Home() {
+  const [documents,setDocuments] = useState<ReadingDocument[]>([sampleDocument]);
+  const [selectedId,setSelectedId] = useState('sample');
+  const active = documents.find(item=>item.id===selectedId) ?? sampleDocument;
+  const [page,setPage] = useState(0);
+  const [pasted,setPasted] = useState('');
+  const [pasteName,setPasteName] = useState('');
+  const [language,setLanguage] = useState('eng');
+  const [forceOCR,setForceOCR] = useState(false);
+  const [busy,setBusy] = useState<ImportProgress|null>(null);
+  const [error,setError] = useState('');
+  const [dragging,setDragging] = useState(false);
+  const [voices,setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [voiceId,setVoiceId] = useState('system');
+  const [speed,setSpeed] = useState(1);
+  const [fontSize,setFontSize] = useState(20);
+  const [supported,setSupported] = useState(true);
+  const [playback,setPlayback] = useState<PlayerSnapshot>({index:0,status:'idle'});
+  const [editOpen,setEditOpen] = useState(false);
+  const [edited,setEdited] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
+  const importJob = useRef<AbortController|null>(null);
+  const speech = useRef<SpeechPlayer|null>(null);
+  const passageElement = useRef<HTMLButtonElement|null>(null);
+  const activeRef = useRef(active);
+  const addTextRef = useRef<(text:string,name:string)=>ReadingDocument>(()=>sampleDocument);
+  const actualVoice = voices.find(v=>v.voiceURI===voiceId) ?? null;
+  const readPercent = playback.status === 'ended' ? 100 : Math.round(playback.index / Math.max(1,active.passages.length)*100);
+  const readingMinutes = Math.max(1,Math.ceil(active.words / (160 * speed)));
+  const pagePassages = useMemo(()=>active.passages.map((passage,index)=>({...passage,index})).filter(p=>p.page===page),[active,page]);
+  const groups = useMemo(()=>{
+    const output:typeof pagePassages[] = [];
+    for (const passage of pagePassages) {
+      if (!output.length || output.at(-1)![0].paragraph!==passage.paragraph) output.push([]);
+      output.at(-1)!.push(passage);
+    }
+    return output;
+  },[pagePassages]);
+
+  useEffect(()=>{
+    if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) { setSupported(false); return; }
+    const synth = window.speechSynthesis;
+    const player = new SpeechPlayer(synth,text=>new SpeechSynthesisUtterance(text),setPlayback,setError);
+    speech.current = player;
+    const loadVoices = ()=>setVoices(synth.getVoices());
+    loadVoices(); synth.addEventListener('voiceschanged',loadVoices);
+    return ()=>{ player.destroy(); synth.removeEventListener('voiceschanged',loadVoices); speech.current=null; };
+  },[]);
+  useEffect(()=>{ activeRef.current=active; speech.current?.load(active.passages.map(p=>p.text)); setPage(0); },[active]);
+  useEffect(()=>{ speech.current?.configure(speed,actualVoice); },[speed,actualVoice]);
+  useEffect(()=>{
+    if (playback.status==='playing') {
+      const passage = active.passages[playback.index];
+      if (passage) setPage(passage.page);
+      passageElement.current?.scrollIntoView({behavior:'auto',block:'nearest'});
+    }
+  },[playback.index,playback.status,active,page]);
+  useEffect(()=>()=>{importJob.current?.abort();},[]);
+
+  function selectDocument(document:ReadingDocument) { setSelectedId(document.id); setError(''); }
+  function addDocument(document:ReadingDocument) {
+    setDocuments(current=>[...current,document]); setSelectedId(document.id); setError('');
+  }
+  function addText(text:string,name:string) {
+    if (text.length>MAX_CHARACTERS) throw new Error('Use fewer than 1 million characters, or split the text into smaller parts.');
+    const document=makeDocument(name.trim() || 'Pasted text','Text',paginateText(text));
+    addDocument(document); return document;
+  }
+  addTextRef.current=addText;
+  useEffect(()=>{
+    const context=(document as Document & {modelContext?:ModelContext}).modelContext;
+    if (!context?.registerTool) return;
+    const lifecycle=new AbortController();
+    const register=(tool:ModelTool)=>{
+      try { void Promise.resolve(context.registerTool(tool,{signal:lifecycle.signal})).catch(()=>{}); } catch { /* Optional browser API. */ }
+    };
+    register({name:'insert_reading_text',description:'Add pasted text to Folio and select it for reading. Does not start audio.',inputSchema:{type:'object',properties:{text:{type:'string',minLength:1,maxLength:MAX_CHARACTERS},title:{type:'string',maxLength:200}},required:['text'],additionalProperties:false},annotations:{readOnlyHint:false,untrustedContentHint:true},execute(input){
+      if (!input || typeof input!=='object' || !('text' in input) || typeof input.text!=='string' || !input.text.trim()) throw new Error('A nonempty text string is required.');
+      const value=input as {text:string;title?:unknown};
+      if (value.title!==undefined && (typeof value.title!=='string' || value.title.length>200)) throw new Error('Title must be a string of at most 200 characters.');
+      const result=addTextRef.current(value.text,typeof value.title==='string'?value.title:'Pasted text');
+      return new Promise(resolve=>requestAnimationFrame(()=>resolve({id:result.id,title:result.name,pages:result.pages.length,words:result.words})));
+    }});
+    register({name:'get_reading_status',description:'Read the title and size of the selected document without returning its text.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true},execute(input){if (!input || typeof input!=='object' || Object.keys(input).length) throw new Error('Expected an empty object.');const current=activeRef.current;return {title:current.name,pages:current.pages.length,words:current.words};}});
+    return ()=>lifecycle.abort();
+  },[]);
+
+  async function openFiles(files:File[]) {
+    if (!files.length || importJob.current) return;
+    const controller=new AbortController(); importJob.current=controller;
+    setError(''); speech.current?.pause();
+    const failures:string[]=[];
+    for (const file of files) {
+      if (controller.signal.aborted) break;
+      setBusy({message:`Opening ${file.name}…`,percent:0});
+      try {
+        const document=await extractDocument(file,language,forceOCR,controller.signal,setBusy);
+        if (!controller.signal.aborted) addDocument(document);
+      } catch (reason) {
+        if (!controller.signal.aborted) failures.push(`${file.name}: ${reason instanceof Error?reason.message:'Could not open this file. Try another copy.'}`);
+      }
+    }
+    if (importJob.current===controller) {
+      importJob.current=null; setBusy(null); if (failures.length) setError(failures.join('\n'));
+    }
+  }
+  function cancelImport() { importJob.current?.abort(); importJob.current=null; setBusy(null); }
+  function togglePlayback() { setError(''); if (playback.status==='playing') speech.current?.pause(); else speech.current?.play(); }
+  function goToPage(next:number) {
+    setPage(next); const index=active.passages.findIndex(p=>p.page===next);
+    if (index>=0) speech.current?.seek(index); else speech.current?.pause();
+  }
+  function downloadText() {
+    const blob=new Blob([active.pages.join('\n\n')],{type:'text/plain;charset=utf-8'});
+    const url=URL.createObjectURL(blob); const link=document.createElement('a');
+    link.href=url; link.download=active.name.replace(/\.[^.]+$/,'')+'.txt'; link.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+  function openEditor() { speech.current?.pause(); setEdited(active.pages[page]); setEditOpen(true); }
+  function saveEdit() {
+    try {
+      const pages=[...active.pages]; pages[page]=edited;
+      const updated=makeDocument(active.name,active.kind,pages,active.warnings,active.id);
+      setDocuments(current=>current.map(doc=>doc.id===active.id?updated:doc)); setEditOpen(false); setError('');
+    } catch (reason) { setError(reason instanceof Error?reason.message:'The edited text could not be saved.'); }
+  }
+  const statusLabel=playback.status==='playing'?'Reading aloud':playback.status==='paused'?'Paused':playback.status==='ended'?'Finished reading':'Ready when you are';
+
+  return <main className="app-shell">
+    <header className="app-header"><a className="brand" href="/" aria-label="Folio home"><BookOpen size={27}/><span>folio<span className="brand-dot">.</span></span></a><span className="header-caption">Your reading room</span><span className="local-note">Files are processed in your browser</span></header>
+    <div className="workspace">
+      <aside className="library" aria-label="Documents and reading settings">
+        <div className="section-title"><h1>Add something to read</h1><ArrowUpRight size={18}/></div>
+        <Tabs defaultValue="file"><TabsList className="import-tabs"><TabsTrigger value="file">Open a file</TabsTrigger><TabsTrigger value="text">Paste text</TabsTrigger></TabsList>
+          <TabsContent value="file">
+            <input ref={fileInput} type="file" multiple accept=".pdf,.docx,.txt,.md,.markdown,.csv,.log,.png,.jpg,.jpeg,.webp,.bmp,.gif" className="sr-only" aria-label="Choose documents" disabled={!!busy} onChange={event=>{void openFiles(Array.from(event.target.files??[]));event.target.value='';}}/>
+            <button className={`dropzone${dragging?' dragging':''}`} disabled={!!busy} onClick={()=>fileInput.current?.click()} onDragOver={event=>{event.preventDefault();setDragging(true);}} onDragLeave={()=>setDragging(false)} onDrop={event=>{event.preventDefault();setDragging(false);void openFiles(Array.from(event.dataTransfer.files));}}>
+              <Upload size={28}/><strong>Drop your document here</strong><span>or choose a file</span><small>PDF, DOCX, TXT, or an image</small>
+            </button>
+            <p className="file-limits">Up to 50 MB per file · 250 PDF pages</p>
+            <label className="control-label" id="recognition-label"><ScanText size={15}/> Text recognition language</label>
+            <Select value={language} onValueChange={value=>value&&setLanguage(value)} items={OCR_LANGUAGES} disabled={!!busy}><SelectTrigger aria-labelledby="recognition-label" className="full-select"><SelectValue/></SelectTrigger><SelectContent>{OCR_LANGUAGES.map(item=><SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select>
+            <div className="switch-row"><label htmlFor="force-ocr">Recognize every PDF page</label><Switch id="force-ocr" checked={forceOCR} onCheckedChange={setForceOCR} disabled={!!busy}/></div>
+            <p className="field-note">Scanned pages are recognized automatically. Turn this on for mixed pages or missing text. Language data downloads on first use.</p>
+          </TabsContent>
+          <TabsContent value="text"><input className="title-input" aria-label="Document title" placeholder="Document title (optional)" value={pasteName} maxLength={200} onChange={event=>setPasteName(event.target.value)}/><textarea className="text-input" placeholder="Paste anything you’d like to listen to…" aria-label="Text to read" value={pasted} maxLength={MAX_CHARACTERS} onChange={event=>setPasted(event.target.value)}/><button className="primary-button full-width" disabled={!pasted.trim() || !!busy} onClick={()=>{try{addText(pasted,pasteName);setPasted('');setPasteName('');}catch(reason){setError(reason instanceof Error?reason.message:'Could not add text.');}}}>Add text to reader</button></TabsContent>
+        </Tabs>
+        {busy&&<div className="import-progress" role="status"><div><LoaderCircle className="spinning" size={16}/><span>{busy.message}</span><button className="icon-button" onClick={cancelImport} aria-label="Cancel import"><X size={17}/></button></div><Progress value={busy.percent} aria-label="Import progress"/></div>}
+        <div className="library-heading">In this session <span>{documents.length}</span></div>
+        <div className="document-list">{documents.map(document=><button key={document.id} className={`document-item${document.id===active.id?' selected':''}`} onClick={()=>selectDocument(document)} aria-pressed={document.id===active.id}><FileText size={21}/><div><strong>{document.name}</strong><small>{document.kind} · {document.pages.length} {document.pages.length===1?'page':'pages'}</small></div></button>)}</div>
+        <div className="voice-settings"><label className="control-label" id="voice-label"><Volume2 size={16}/> Reading voice</label>
+          <Select value={voiceId} onValueChange={value=>value&&setVoiceId(value)} items={[{value:'system',label:'Device default'},...voices.map(v=>({value:v.voiceURI,label:`${v.name} (${v.lang})`}))]} disabled={!supported}><SelectTrigger className="full-select" aria-labelledby="voice-label"><SelectValue/></SelectTrigger><SelectContent><SelectItem value="system">Device default</SelectItem>{voices.map(voice=><SelectItem key={voice.voiceURI} value={voice.voiceURI}>{voice.name} ({voice.lang}){voice.localService?'':' · online'}</SelectItem>)}</SelectContent></Select>
+          <p className="field-note">{actualVoice ? actualVoice.localService?'This voice runs on your device.':'This voice uses an online service. Text is sent to your device’s speech provider.':'Your device chooses the voice. Some voices use an online speech service.'}</p>
+          <div className="setting-heading"><label id="speed-label">Reading speed</label><span>{speed.toFixed(2).replace(/0$/,'')}×</span></div><Slider aria-labelledby="speed-label" value={[speed]} min={.5} max={2} step={.25} onValueChange={value=>setSpeed(Array.isArray(value)?value[0]:value)}/><div className="range-labels"><span>Slower</span><span>Faster</span></div>
+        </div>
+        <div className="side-note"><Headphones size={21}/><p>Documents are kept for this session.<br/>Download the text to keep a copy.</p></div>
+      </aside>
+      <section className="reading-area" aria-label="Document reader">
+        {error&&<div className="error-notice" role="alert"><p>{error}</p><button className="icon-button" aria-label="Dismiss error" onClick={()=>setError('')}><X size={17}/></button></div>}
+        {!supported&&<div className="error-notice" role="alert">This browser does not support read-aloud. Open this page in Safari, Chrome, or Edge.</div>}
+        <div className="reader-toolbar"><span><FileText size={16}/>{active.kind==='Sample'?'Sample document':'Reading view'}</span><div className="toolbar-actions"><button className="icon-button" title="Smaller text" aria-label="Smaller text" disabled={fontSize<=16} onClick={()=>setFontSize(size=>size-2)}>A−</button><button className="icon-button" title="Larger text" aria-label="Larger text" disabled={fontSize>=30} onClick={()=>setFontSize(size=>size+2)}>A+</button><span className="toolbar-separator"/><button className="icon-button" title="Edit this page’s text" aria-label="Edit this page’s text" onClick={openEditor}><PencilLine size={17}/></button><button className="icon-button" title="Download extracted text" aria-label="Download extracted text" onClick={downloadText}><Download size={17}/></button></div></div>
+        {active.warnings.length>0&&<details className="recognition-note"><summary><ScanText size={15}/> Review recognized text ({active.warnings.length} {active.warnings.length===1?'note':'notes'})</summary><ul>{active.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul></details>}
+        <article className="paper"><div className="paper-meta">{active.id==='sample'?'Welcome to Folio':`${active.words.toLocaleString()} words · About ${readingMinutes} min at this speed`}</div><h2>{active.name}</h2>
+          <div className="document-text" style={{fontSize}}>{groups.length?groups.map((group,index)=><p key={`${page}-${index}`}>{group.map(passage=><span key={passage.index}><button ref={passage.index===playback.index?passageElement:undefined} className={`passage${passage.index===playback.index && playback.status!=='idle'?' current':''}`} aria-label={`Read from: ${passage.text.slice(0,70)}`} aria-current={passage.index===playback.index?'true':undefined} onClick={()=>{setError('');speech.current?.seek(passage.index);speech.current?.play();}} disabled={!supported}>{passage.text}</button>{' '}</span>)}</p>):<p className="empty-page">No readable text on this page. Use the pencil to add text, or open the PDF with “Recognize every PDF page” enabled.</p>}</div>
+          <div className="paper-end">{page===active.pages.length-1?active.id==='sample'?'End of sample':'End of document':`Page ${page+1}`}</div>
+        </article>
+        <div className="page-controls"><span>Click a passage to read from there</span><div><button className="icon-button" aria-label="Previous page" disabled={page===0} onClick={()=>goToPage(page-1)}><ChevronLeft size={18}/></button><span>Page {page+1} of {active.pages.length}</span><button className="icon-button" aria-label="Next page" disabled={page>=active.pages.length-1} onClick={()=>goToPage(page+1)}><ChevronRight size={18}/></button></div></div>
+      </section>
+    </div>
+    <footer className="player"><div className="player-document"><Headphones/><div><strong role="status">{statusLabel}</strong><small>{active.name}</small></div></div><div className="playback-center"><div className="transport"><button className="icon-button" aria-label="Previous passage" title="Previous passage" disabled={!supported || playback.index===0} onClick={()=>speech.current?.seek(playback.index-1)}><SkipBack size={19}/></button><button className="play-button" disabled={!supported} onClick={togglePlayback}>{playback.status==='playing'?<Pause size={19} fill="currentColor"/>:<Play size={19} fill="currentColor"/>}{playback.status==='playing'?'Pause':playback.status==='ended'?'Read again':playback.status==='paused'?'Resume':'Read aloud'}</button><button className="icon-button" aria-label="Next passage" title="Next passage" disabled={!supported || playback.index>=active.passages.length-1} onClick={()=>speech.current?.seek(playback.index+1)}><SkipForward size={19}/></button><button className="icon-button stop-button" aria-label="Stop and return to start" title="Stop and return to start" disabled={!supported || playback.status==='idle'} onClick={()=>{speech.current?.stop();setPage(0);}}><Square size={17}/></button></div></div><div className="reading-progress"><div><span>{readPercent}% read</span><span>~{readingMinutes} min total</span></div><Slider aria-label="Reading position" value={[playback.status==='ended'?active.passages.length-1:playback.index]} min={0} max={Math.max(1,active.passages.length-1)} step={1} disabled={!supported || active.passages.length<2} onValueChange={value=>{const index=Array.isArray(value)?value[0]:value;speech.current?.seek(index);setPage(active.passages[index]?.page??0);}}/></div></footer>
+    <Dialog open={editOpen} onOpenChange={setEditOpen}><DialogContent className="edit-dialog"><DialogHeader><DialogTitle>Edit page {page+1}</DialogTitle><DialogDescription>Correct the recognized text. Your changes apply to reading and playback.</DialogDescription></DialogHeader><textarea className="text-input edit-input" aria-label="Page text" value={edited} maxLength={MAX_CHARACTERS} onChange={event=>setEdited(event.target.value)}/><DialogFooter><button className="secondary-button" onClick={()=>setEditOpen(false)}>Cancel</button><button className="primary-button" onClick={saveEdit}>Save text</button></DialogFooter></DialogContent></Dialog>
+  </main>;
+}

@@ -1,0 +1,10 @@
+import { mkdir, cp, readdir, copyFile } from 'node:fs/promises';
+await mkdir('public/pdf', { recursive: true });
+await mkdir('public/ocr/core', { recursive: true });
+await copyFile('node_modules/pdfjs-dist/LICENSE', 'public/pdf/LICENSE');
+await copyFile('node_modules/tesseract.js/LICENSE.md', 'public/ocr/LICENSE.md');
+await copyFile('node_modules/tesseract.js-core/LICENSE', 'public/ocr/core/LICENSE');
+await copyFile('node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs', 'public/pdf/pdf.worker.min.mjs');
+for (const directory of ['cmaps', 'standard_fonts', 'wasm']) await cp(`node_modules/pdfjs-dist/${directory}`, `public/pdf/${directory}`, { recursive: true });
+await copyFile('node_modules/tesseract.js/dist/worker.min.js', 'public/ocr/worker.min.js');
+for (const file of await readdir('node_modules/tesseract.js-core')) if (file.includes('lstm') && file.includes('.wasm')) await copyFile(`node_modules/tesseract.js-core/${file}`, `public/ocr/core/${file}`);

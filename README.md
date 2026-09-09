@@ -20,13 +20,15 @@ Limits: 50 MB per file, 250 PDF pages, 1 million extracted characters per docume
 
 ## Read-aloud
 
-Uses the device's Web Speech API. Voices vary by browser and operating system. Online voices may send document text to the device's speech provider. Playback uses short passages; pause cancels the current passage and resume repeats it from its beginning. Highlighting tracks passages rather than exact words. Keep the page open while listening; background playback depends on browser behavior.
+Uses the device's Web Speech API. Google UK English Male is selected by default when the browser provides it, including when voices load after the page opens. Otherwise Folio uses the device default. Choosing another voice or Device default keeps that choice for the session. Voices vary by browser and operating system. Online voices may send document text to the device's speech provider. Playback uses short passages; pause cancels the current passage and resume repeats it from its beginning. Highlighting tracks passages rather than exact words. Keep the page open while listening; background playback depends on browser behavior.
+
+Skip reading clutter is on by default. It omits common paragraph/list labels, decorative bullets and separators, Markdown emphasis markers, numeric and author-year citations, footnote markers, and recognized reference lists from audio. Visible text and text downloads keep the full document. Review this page lets you restore individual items; turning the filter off reads everything. Detection uses text patterns and may miss unusual formats; meaningful numbers, formulas, and prose are kept where the pattern is ambiguous.
 
 Files and extracted text remain in memory for this browser session. Refreshing closes the documents. The text download saves the extracted text. OCR language data downloads from the Tesseract project's CDN on first use and may be cached by the browser. Files are not uploaded to Folio's server.
 
 ## Validation
 
-`npm test` runs 19 checks covering speech cancellation and stale callbacks, document replacement, blank pages, Unicode-safe chunking, PDF font-run spacing, worker cancellation/timeouts, and optical/automatic PDF reading paths. The optical checks assert that embedded text extraction is never called, even when it would throw. `npx tsc --noEmit` checks types.
+`npm test` runs 32 checks covering read-aloud filtering and restoration, source offsets, meaningful numbers and formulas, default voice selection and delayed voice loading, speech cancellation and stale callbacks, document replacement, blank pages, Unicode-safe chunking, PDF font-run spacing, worker cancellation/timeouts, and optical/automatic PDF reading paths. The optical checks assert that embedded text extraction is never called, even when it would throw. `npx tsc --noEmit` checks types.
 
 `npm run test:ocr -- /path/to/models` uses a local `eng.traineddata.gz` model and the two synthetic PDFs in `tests/fixtures`. Their visible glyphs are normal English, but their ToUnicode maps produce replacement symbols or long printable gibberish. Both recovered all three expected lines exactly at the production rendering resolution with zero embedded extraction calls in optical mode. This checks actual PDF rendering and recognition without uploading files or downloading models.
 

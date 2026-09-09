@@ -1,5 +1,5 @@
 export const MAX_CHARACTERS = 1_000_000;
-export type Passage = { text: string; page: number; paragraph: number };
+export type Passage = { text: string; page: number; paragraph: number; start: number; end: number };
 export type ReadingDocument = { id: string; name: string; kind: string; pages: string[]; passages: Passage[]; words: number; warnings: string[] };
 
 export function cleanText(text: string) {
@@ -30,8 +30,15 @@ export function paginateText(text: string): string[] {
 export function splitPassages(pages: string[]): Passage[] {
   const passages: Passage[] = [];
   pages.forEach((pageText, page) => {
-    cleanText(pageText).split(/\n\s*\n/).forEach((paragraphText, paragraph) => {
-      let text = paragraphText.replace(/\n/g, ' ').trim();
+    const source = cleanText(pageText);
+    let cursor = 0;
+    source.split(/\n\s*\n/).forEach((paragraphText, paragraph) => {
+      const paragraphStart = source.indexOf(paragraphText, cursor);
+      cursor = paragraphStart + paragraphText.length;
+      let text = paragraphText.replace(/\n/g, ' ');
+      let start = paragraphStart;
+      const leading = text.length - text.trimStart().length;
+      start += leading; text = text.trim();
       while (text) {
         let end = Math.min(text.length, 240);
         if (text.length > 240) {
@@ -42,8 +49,11 @@ export function splitPassages(pages: string[]): Passage[] {
           if (end < 1) end = 240;
         }
         end = safeBoundary(text, end);
-        passages.push({ text: text.slice(0, end).trim(), page, paragraph });
-        text = text.slice(end).trim();
+        const chunk = text.slice(0, end).trimEnd();
+        passages.push({ text: chunk, page, paragraph, start, end: start + chunk.length });
+        const remaining = text.slice(end);
+        start += end + remaining.length - remaining.trimStart().length;
+        text = remaining.trim();
       }
     });
   });

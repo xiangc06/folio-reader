@@ -1,0 +1,148 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Count 1 /Kids [5 0 R] >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding /ToUnicode 4 0 R >>
+endobj
+4 0 obj
+<< /Length 1455 >>
+stream
+/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /BrokenCopyMap def
+/CMapType 2 def
+1 begincodespacerange
+<00> <ff>
+endcodespacerange
+95 beginbfchar
+<20> <0020>
+<21> <0032>
+<22> <0033>
+<23> <0034>
+<24> <0035>
+<25> <0036>
+<26> <0037>
+<27> <0038>
+<28> <0039>
+<29> <003a>
+<2a> <003b>
+<2b> <003c>
+<2c> <003d>
+<2d> <003e>
+<2e> <003f>
+<2f> <0040>
+<30> <0041>
+<31> <0042>
+<32> <0043>
+<33> <0044>
+<34> <0045>
+<35> <0046>
+<36> <0047>
+<37> <0048>
+<38> <0049>
+<39> <004a>
+<3a> <004b>
+<3b> <004c>
+<3c> <004d>
+<3d> <004e>
+<3e> <004f>
+<3f> <0050>
+<40> <0051>
+<41> <0052>
+<42> <0053>
+<43> <0054>
+<44> <0055>
+<45> <0056>
+<46> <0057>
+<47> <0058>
+<48> <0059>
+<49> <005a>
+<4a> <005b>
+<4b> <005c>
+<4c> <005d>
+<4d> <005e>
+<4e> <005f>
+<4f> <0060>
+<50> <0061>
+<51> <0062>
+<52> <0063>
+<53> <0064>
+<54> <0065>
+<55> <0066>
+<56> <0067>
+<57> <0068>
+<58> <0069>
+<59> <006a>
+<5a> <006b>
+<5b> <006c>
+<5c> <006d>
+<5d> <006e>
+<5e> <006f>
+<5f> <0070>
+<60> <0071>
+<61> <0072>
+<62> <0073>
+<63> <0074>
+<64> <0075>
+<65> <0076>
+<66> <0077>
+<67> <0078>
+<68> <0079>
+<69> <007a>
+<6a> <007b>
+<6b> <007c>
+<6c> <007d>
+<6d> <007e>
+<6e> <0021>
+<6f> <0022>
+<70> <0023>
+<71> <0024>
+<72> <0025>
+<73> <0026>
+<74> <0027>
+<75> <0028>
+<76> <0029>
+<77> <002a>
+<78> <002b>
+<79> <002c>
+<7a> <002d>
+<7b> <002e>
+<7c> <002f>
+<7d> <0030>
+<7e> <0031>
+endbfchar
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 181 >>
+stream
+BT /F1 22 Tf 54 710 Td (Folio optical text recovery) Tj 0 -60 Td /F1 20 Tf (The quick brown fox jumps over the lazy dog.) Tj 0 -48 Td (Invoice number 12345. Total 67 dollars.) Tj ET
+endstream
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000229 00000 n 
+0000001736 00000 n 
+0000001862 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+2094
+%%EOF

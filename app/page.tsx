@@ -6,10 +6,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Progress } from '@/components/ui/progress';
-import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { sampleDocument, makeDocument, paginateText, MAX_CHARACTERS, type ReadingDocument } from '@/lib/reader-model';
 import { extractDocument, OCR_LANGUAGES, type ImportProgress } from '@/lib/extract-document';
+import { PDF_READ_MODES, type PDFReadMode } from '@/lib/pdf-reading';
 import { SpeechPlayer, type PlayerSnapshot } from '@/lib/speech-player';
 
 type ModelTool = { name:string; description:string; inputSchema:object; annotations:object; execute:(input:unknown)=>unknown };
@@ -23,7 +23,7 @@ export default function Home() {
   const [pasted,setPasted] = useState('');
   const [pasteName,setPasteName] = useState('');
   const [language,setLanguage] = useState('eng');
-  const [forceOCR,setForceOCR] = useState(false);
+  const [pdfMode,setPDFMode] = useState<PDFReadMode>('optical');
   const [busy,setBusy] = useState<ImportProgress|null>(null);
   const [error,setError] = useState('');
   const [dragging,setDragging] = useState(false);
@@ -37,6 +37,7 @@ export default function Home() {
   const [edited,setEdited] = useState('');
   const fileInput = useRef<HTMLInputElement>(null);
   const importJob = useRef<AbortController|null>(null);
+  const sourcePDFs = useRef(new Map<string,File>());
   const speech = useRef<SpeechPlayer|null>(null);
   const passageElement = useRef<HTMLButtonElement|null>(null);
   const activeRef = useRef(active);
@@ -111,14 +112,33 @@ export default function Home() {
       if (controller.signal.aborted) break;
       setBusy({message:`Opening ${file.name}…`,percent:0});
       try {
-        const document=await extractDocument(file,language,forceOCR,controller.signal,setBusy);
-        if (!controller.signal.aborted) addDocument(document);
+        const document=await extractDocument(file,language,pdfMode,controller.signal,setBusy);
+        if (!controller.signal.aborted) {
+          if (file.type==='application/pdf' || /\.pdf$/i.test(file.name)) sourcePDFs.current.set(document.id,file);
+          addDocument(document);
+        }
       } catch (reason) {
         if (!controller.signal.aborted) failures.push(`${file.name}: ${reason instanceof Error?reason.message:'Could not open this file. Try another copy.'}`);
       }
     }
     if (importJob.current===controller) {
       importJob.current=null; setBusy(null); if (failures.length) setError(failures.join('\n'));
+    }
+  }
+  async function rereadPDF() {
+    const source=sourcePDFs.current.get(active.id);
+    if (!source || importJob.current) return;
+    const originalId=active.id;
+    const controller=new AbortController(); importJob.current=controller;
+    setError(''); speech.current?.pause();
+    setBusy({message:`Reading ${source.name} visually…`,percent:0});
+    try {
+      const result=await extractDocument(source,language,'optical',controller.signal,setBusy);
+      if (!controller.signal.aborted) setDocuments(current=>current.map(doc=>doc.id===originalId?{...result,id:originalId}:doc));
+    } catch (reason) {
+      if (!controller.signal.aborted) setError(reason instanceof Error?reason.message:'Optical recognition failed. Your existing text was kept.');
+    } finally {
+      if (importJob.current===controller) { importJob.current=null; setBusy(null); }
     }
   }
   function cancelImport() { importJob.current?.abort(); importJob.current=null; setBusy(null); }
@@ -154,10 +174,12 @@ export default function Home() {
               <Upload size={28}/><strong>Drop your document here</strong><span>or choose a file</span><small>PDF, DOCX, TXT, or an image</small>
             </button>
             <p className="file-limits">Up to 50 MB per file · 250 PDF pages</p>
+            <label className="control-label" id="pdf-mode-label"><FileText size={15}/> PDF reading method</label>
+            <Select value={pdfMode} onValueChange={value=>{if(value==='optical'||value==='auto')setPDFMode(value);}} items={PDF_READ_MODES} disabled={!!busy}><SelectTrigger aria-labelledby="pdf-mode-label" className="full-select"><SelectValue/></SelectTrigger><SelectContent>{PDF_READ_MODES.map(item=><SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select>
+            <p className="field-note pdf-method-note">{pdfMode==='optical'?'Reads the visible page image on every page. Bypasses broken text encoding and font mappings. Slower than extracting PDF text.':'Uses PDF text when it looks readable, with optical recognition for scans and detected errors. Choose Optical OCR if the words are still garbled.'}</p>
             <label className="control-label" id="recognition-label"><ScanText size={15}/> Text recognition language</label>
             <Select value={language} onValueChange={value=>value&&setLanguage(value)} items={OCR_LANGUAGES} disabled={!!busy}><SelectTrigger aria-labelledby="recognition-label" className="full-select"><SelectValue/></SelectTrigger><SelectContent>{OCR_LANGUAGES.map(item=><SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent></Select>
-            <div className="switch-row"><label htmlFor="force-ocr">Recognize every PDF page</label><Switch id="force-ocr" checked={forceOCR} onCheckedChange={setForceOCR} disabled={!!busy}/></div>
-            <p className="field-note">Scanned pages are recognized automatically. Turn this on for mixed pages or missing text. Language data downloads on first use.</p>
+            <p className="field-note">Choose the language printed on the page. Language data downloads on first use.</p>
           </TabsContent>
           <TabsContent value="text"><input className="title-input" aria-label="Document title" placeholder="Document title (optional)" value={pasteName} maxLength={200} onChange={event=>setPasteName(event.target.value)}/><textarea className="text-input" placeholder="Paste anything you’d like to listen to…" aria-label="Text to read" value={pasted} maxLength={MAX_CHARACTERS} onChange={event=>setPasted(event.target.value)}/><button className="primary-button full-width" disabled={!pasted.trim() || !!busy} onClick={()=>{try{addText(pasted,pasteName);setPasted('');setPasteName('');}catch(reason){setError(reason instanceof Error?reason.message:'Could not add text.');}}}>Add text to reader</button></TabsContent>
         </Tabs>
@@ -174,10 +196,11 @@ export default function Home() {
       <section className="reading-area" aria-label="Document reader">
         {error&&<div className="error-notice" role="alert"><p>{error}</p><button className="icon-button" aria-label="Dismiss error" onClick={()=>setError('')}><X size={17}/></button></div>}
         {!supported&&<div className="error-notice" role="alert">This browser does not support read-aloud. Open this page in Safari, Chrome, or Edge.</div>}
-        <div className="reader-toolbar"><span><FileText size={16}/>{active.kind==='Sample'?'Sample document':'Reading view'}</span><div className="toolbar-actions"><button className="icon-button" title="Smaller text" aria-label="Smaller text" disabled={fontSize<=16} onClick={()=>setFontSize(size=>size-2)}>A−</button><button className="icon-button" title="Larger text" aria-label="Larger text" disabled={fontSize>=30} onClick={()=>setFontSize(size=>size+2)}>A+</button><span className="toolbar-separator"/><button className="icon-button" title="Edit this page’s text" aria-label="Edit this page’s text" onClick={openEditor}><PencilLine size={17}/></button><button className="icon-button" title="Download extracted text" aria-label="Download extracted text" onClick={downloadText}><Download size={17}/></button></div></div>
+        <div className="reader-toolbar"><span><FileText size={16}/>{active.kind==='Sample'?'Sample document':'Reading view'}</span><div className="toolbar-actions"><button className="icon-button" title="Smaller text" aria-label="Smaller text" disabled={fontSize<=16} onClick={()=>setFontSize(size=>size-2)}>A−</button><button className="icon-button" title="Larger text" aria-label="Larger text" disabled={fontSize>=30} onClick={()=>setFontSize(size=>size+2)}>A+</button><span className="toolbar-separator"/><button className="icon-button" title="Edit this page’s text" aria-label="Edit this page’s text" onClick={openEditor} disabled={!!busy}><PencilLine size={17}/></button><button className="icon-button" title="Download extracted text" aria-label="Download extracted text" onClick={downloadText}><Download size={17}/></button></div></div>
+        {sourcePDFs.current.has(active.id)&&<div className="optical-action"><div><strong>{active.kind==='PDF · optical OCR'?'Reading from page images':'Garbled or missing words?'}</strong><p>Recognize this PDF again using the selected language. This replaces the text and any corrections when recognition succeeds.</p></div><button className="secondary-button" disabled={!!busy} onClick={()=>void rereadPDF()}><ScanText size={16}/>{active.kind==='PDF · optical OCR'?'Run OCR again':'Read PDF visually'}</button></div>}
         {active.warnings.length>0&&<details className="recognition-note"><summary><ScanText size={15}/> Review recognized text ({active.warnings.length} {active.warnings.length===1?'note':'notes'})</summary><ul>{active.warnings.map((warning,index)=><li key={index}>{warning}</li>)}</ul></details>}
         <article className="paper"><div className="paper-meta">{active.id==='sample'?'Welcome to Folio':`${active.words.toLocaleString()} words · About ${readingMinutes} min at this speed`}</div><h2>{active.name}</h2>
-          <div className="document-text" style={{fontSize}}>{groups.length?groups.map((group,index)=><p key={`${page}-${index}`}>{group.map(passage=><span key={passage.index}><button ref={passage.index===playback.index?passageElement:undefined} className={`passage${passage.index===playback.index && playback.status!=='idle'?' current':''}`} aria-label={`Read from: ${passage.text.slice(0,70)}`} aria-current={passage.index===playback.index?'true':undefined} onClick={()=>{setError('');speech.current?.seek(passage.index);speech.current?.play();}} disabled={!supported}>{passage.text}</button>{' '}</span>)}</p>):<p className="empty-page">No readable text on this page. Use the pencil to add text, or open the PDF with “Recognize every PDF page” enabled.</p>}</div>
+          <div className="document-text" style={{fontSize}}>{groups.length?groups.map((group,index)=><p key={`${page}-${index}`}>{group.map(passage=><span key={passage.index}><button ref={passage.index===playback.index?passageElement:undefined} className={`passage${passage.index===playback.index && playback.status!=='idle'?' current':''}`} aria-label={`Read from: ${passage.text.slice(0,70)}`} aria-current={passage.index===playback.index?'true':undefined} onClick={()=>{setError('');speech.current?.seek(passage.index);speech.current?.play();}} disabled={!supported}>{passage.text}</button>{' '}</span>)}</p>):<p className="empty-page">No readable text on this page. Use the pencil to add text, or try Optical OCR with the language printed on the page.</p>}</div>
           <div className="paper-end">{page===active.pages.length-1?active.id==='sample'?'End of sample':'End of document':`Page ${page+1}`}</div>
         </article>
         <div className="page-controls"><span>Click a passage to read from there</span><div><button className="icon-button" aria-label="Previous page" disabled={page===0} onClick={()=>goToPage(page-1)}><ChevronLeft size={18}/></button><span>Page {page+1} of {active.pages.length}</span><button className="icon-button" aria-label="Next page" disabled={page>=active.pages.length-1} onClick={()=>goToPage(page+1)}><ChevronRight size={18}/></button></div></div>
